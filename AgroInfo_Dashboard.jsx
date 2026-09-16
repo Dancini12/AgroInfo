@@ -3,8 +3,11 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { TrendingUp, TrendingDown, RefreshCw, BookOpen, BarChart3, Clock, Wheat, DollarSign, Activity, ChevronDown, ChevronUp, Globe, Timer, ArrowRight, Zap, Pause, Play, Newspaper, ExternalLink, Search, MapPin } from "lucide-react";
 
 const UPDATE_SEC = 60;
+const COMM_UPDATE_MS = 30 * 60 * 1000;
 const API_MOEDAS_URL = "https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL,GBP-BRL,ARS-BRL";
-const API_ACOES_URL = "https://brapi.dev/api/quote/PETR4,VALE3,%5EBVSP";
+const API_COMM_URL = "https://agrodocai.com.br/api/v1/cotacao";
+const LS_ACOES = "agroinfo_acoes_v1";
+const LS_COMM = "agroinfo_comm_v1";
 const TABS = ["painel", "noticias", "historico", "graficos", "glossario"];
 const TAB_LABELS = { painel: "Painel", noticias: "Notícias", historico: "Histórico", graficos: "Gráficos", glossario: "Glossário" };
 const TAB_ICONS = { painel: Activity, noticias: Newspaper, historico: Clock, graficos: BarChart3, glossario: BookOpen };
@@ -25,10 +28,11 @@ const INIT_INDICES = [
   { id: "sp500", nome: "S&P 500", emoji: "🇺🇸", valor: 7259, var: 0.81 },
 ];
 const INIT_COMM = [
-  { id: "boi", nome: "Boi Gordo", emoji: "🐂", valor: 354.20, un: "R$/@", cat: "pecuaria" },
+  { id: "boi", nome: "Boi Gordo", emoji: "🐂", valor: 354.20, un: "R$/@", cat: "pecuaria", real: true },
+  { id: "vaca_gorda", nome: "Vaca Gorda", emoji: "🐄", valor: 298.35, un: "R$/@", cat: "pecuaria", real: true },
   { id: "suino", nome: "Suíno Vivo", emoji: "🐖", valor: 7.12, un: "R$/Kg", cat: "pecuaria" },
-  { id: "milho", nome: "Milho", emoji: "🌽", valor: 67.53, un: "R$/Saca", cat: "graos" },
-  { id: "soja", nome: "Soja", emoji: "🌱", valor: 122.50, un: "R$/Saca", cat: "graos" },
+  { id: "milho", nome: "Milho", emoji: "🌽", valor: 67.53, un: "R$/Saca", cat: "graos", real: true },
+  { id: "soja", nome: "Soja", emoji: "🌱", valor: 122.50, un: "R$/Saca", cat: "graos", real: true },
   { id: "feijao", nome: "Feijão", emoji: "🥔", valor: 355.00, un: "R$/Saca", cat: "graos" },
   { id: "cana_pr", nome: "Cana (PR)", emoji: "🎋", valor: 130.50, un: "R$/Ton", cat: "outros" },
   { id: "cana_sp", nome: "Cana (SP)", emoji: "🎋", valor: 160.00, un: "R$/Ton", cat: "outros" },
@@ -122,6 +126,18 @@ const fmt = (v, d = 2) => v.toLocaleString("pt-BR", { minimumFractionDigits: d, 
 const fmtInt = (v) => v.toLocaleString("pt-BR");
 const simVar = (val, pct = 0.4) => parseFloat((val + val * (Math.random() * pct * 2 - pct) / 100).toFixed(val < 1 ? 4 : 2));
 
+const slugify = (s) => s.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+function loadLS(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) return JSON.parse(raw);
+  } catch (_) { /* ignora storage indisponível */ }
+  return fallback;
+}
+function saveLS(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* ignora storage indisponível */ }
+}
+
 function VarBadge({ val }) {
   const p = val >= 0;
   return <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full font-bold" style={{ background: p ? "#dcfce7" : "#fee2e2", color: p ? "#166534" : "#991b1b", fontSize: 10 }}>{p ? "▲+" : "▼"}{fmt(val)}%</span>;
@@ -133,7 +149,7 @@ function SecTitle({ icon: I, title, color = "#1a3a5c" }) {
   return <div className="flex items-center gap-2 mb-3"><div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: color }}><I size={13} color="#fff" /></div><h2 className="text-sm font-bold" style={{ color }}>{title}</h2></div>;
 }
 
-function PriceRow({ emoji, nome, sub, valor, prev, varPct, unidade, flash, alt }) {
+function PriceRow({ emoji, nome, sub, valor, prev, varPct, unidade, flash, alt, onRemove }) {
   const diff = prev != null ? valor - prev : 0;
   const up = diff >= 0;
   const changed = prev != null && Math.abs(diff) > 0.0001;
@@ -146,12 +162,13 @@ function PriceRow({ emoji, nome, sub, valor, prev, varPct, unidade, flash, alt }
         <span className="text-sm font-bold" style={{ color: "#1a3a5c" }}>{unidade === "pts" ? `${fmtInt(valor)} pts` : `R$ ${fmt(valor, dec)}`}</span>
         {changed && <span className="font-bold" style={{ color: up ? "#16a34a" : "#dc2626", fontSize: 10 }}>{up ? "▲" : "▼"}</span>}
         {varPct != null && <VarBadge val={varPct} />}
+        {onRemove && <button onClick={onRemove} title="Remover" className="shrink-0 flex items-center justify-center rounded-full" style={{ width: 16, height: 16, background: "#fee2e2", color: "#991b1b", fontSize: 10, fontWeight: 900, lineHeight: 1 }}>×</button>}
       </div>
     </div>
   );
 }
 
-function CommCard({ item, prev, flash, idx }) {
+function CommCard({ item, prev, flash, idx, onRemove }) {
   const diff = prev != null ? item.valor - prev : 0;
   const up = diff >= 0;
   const changed = prev != null && Math.abs(diff) > 0.001;
@@ -159,14 +176,83 @@ function CommCard({ item, prev, flash, idx }) {
   return (
     <div className="flex items-center justify-between py-2 px-3 rounded-lg border transition-all duration-700" style={{ borderColor: flash ? (up ? "#86efac" : "#fca5a5") : "#e5e7eb", background: flash ? (up ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.1)") : idx % 2 === 0 ? "#f0fdf4" : "#fff" }}>
       <div className="flex items-center gap-1.5"><span className="text-base">{item.emoji}</span><span className="text-sm font-semibold">{item.nome}</span></div>
-      <div className="text-right">
-        <div className="flex items-center gap-1.5 justify-end">
-          {changed && <span className="text-xs line-through opacity-25 hidden sm:inline">{fmt(prev, dec)}</span>}
-          <span className="text-sm font-bold" style={{ color: "#166534" }}>R$ {fmt(item.valor, dec)}</span>
-          {changed && <span className="font-bold" style={{ color: up ? "#16a34a" : "#dc2626", fontSize: 10 }}>{up ? "▲" : "▼"}</span>}
+      <div className="flex items-center gap-2">
+        <div className="text-right">
+          <div className="flex items-center gap-1.5 justify-end">
+            {changed && <span className="text-xs line-through opacity-25 hidden sm:inline">{fmt(prev, dec)}</span>}
+            <span className="text-sm font-bold" style={{ color: "#166534" }}>R$ {fmt(item.valor, dec)}</span>
+            {changed && <span className="font-bold" style={{ color: up ? "#16a34a" : "#dc2626", fontSize: 10 }}>{up ? "▲" : "▼"}</span>}
+          </div>
+          <div className="text-xs opacity-40">{item.un}{item.real && <span title="Cotação real — CEPEA/ESALQ via AgroDoc, a cada 30min" style={{ color: "#16a34a", fontWeight: 700 }}> • real</span>}</div>
         </div>
-        <div className="text-xs opacity-40">{item.un}</div>
+        {onRemove && <button onClick={onRemove} title="Remover" className="shrink-0 flex items-center justify-center rounded-full" style={{ width: 16, height: 16, background: "#fee2e2", color: "#991b1b", fontSize: 10, fontWeight: 900, lineHeight: 1 }}>×</button>}
       </div>
+    </div>
+  );
+}
+
+function AddAcaoForm({ onAdd }) {
+  const [ticker, setTicker] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!ticker.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+    const res = await onAdd(ticker);
+    setLoading(false);
+    if (res.ok) setTicker("");
+    else setError(res.error);
+  };
+
+  return (
+    <div className="mt-2">
+      <div className="flex gap-1.5">
+        <input
+          value={ticker}
+          onChange={e => { setTicker(e.target.value.toUpperCase()); setError(null); }}
+          onKeyDown={e => e.key === "Enter" && submit()}
+          placeholder="Digite o ticker (ex: ITUB4)"
+          className="flex-1 rounded-lg border text-sm px-2.5 py-1.5"
+          style={{ borderColor: "#bfdbfe", outline: "none", fontSize: 12.5 }}
+        />
+        <button onClick={submit} disabled={loading} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shrink-0" style={{ background: "#1a5276", color: "#fff", opacity: loading ? 0.7 : 1 }}>
+          {loading ? "..." : "Adicionar"}
+        </button>
+      </div>
+      {error && <div className="text-xs mt-1" style={{ color: "#991b1b" }}>{error}</div>}
+    </div>
+  );
+}
+
+function AddCommForm({ onAdd, cats }) {
+  const [nome, setNome] = useState("");
+  const [valor, setValor] = useState("");
+  const [un, setUn] = useState("R$/Kg");
+  const [cat, setCat] = useState("outros");
+  const [error, setError] = useState(null);
+
+  const submit = () => {
+    const res = onAdd(nome, valor, un, cat);
+    if (res.ok) { setNome(""); setValor(""); setError(null); }
+    else setError(res.error);
+  };
+
+  return (
+    <div className="mt-3 pt-3" style={{ borderTop: "1px solid #e5e7eb" }}>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: "2fr 1fr" }}>
+        <input value={nome} onChange={e => { setNome(e.target.value); setError(null); }} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Nome (ex: Sorgo)" className="rounded-lg border text-sm px-2.5 py-1.5" style={{ borderColor: "#bbf7d0", outline: "none", fontSize: 12.5 }} />
+        <input value={valor} onChange={e => { setValor(e.target.value); setError(null); }} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Valor (ex: 45.00)" className="rounded-lg border text-sm px-2.5 py-1.5" style={{ borderColor: "#bbf7d0", outline: "none", fontSize: 12.5 }} />
+      </div>
+      <div className="grid gap-1.5 mt-1.5" style={{ gridTemplateColumns: "1fr 1fr auto" }}>
+        <input value={un} onChange={e => setUn(e.target.value)} placeholder="Unidade (ex: R$/Saca)" className="rounded-lg border text-sm px-2.5 py-1.5" style={{ borderColor: "#bbf7d0", outline: "none", fontSize: 12.5 }} />
+        <select value={cat} onChange={e => setCat(e.target.value)} className="rounded-lg border text-sm px-2 py-1.5" style={{ borderColor: "#bbf7d0", outline: "none", fontSize: 12.5 }}>
+          {Object.entries(cats).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+        <button onClick={submit} className="px-3 py-1.5 rounded-lg text-xs font-bold" style={{ background: "#166534", color: "#fff" }}>Adicionar</button>
+      </div>
+      {error && <div className="text-xs mt-1" style={{ color: "#991b1b" }}>{error}</div>}
     </div>
   );
 }
@@ -290,9 +376,10 @@ function WeatherWidget() {
   );
 }
 
-function PainelTab({ moedas, acoes, indices, comm, pm, pa, pi, pc, flash }) {
+function PainelTab({ moedas, acoes, indices, comm, pm, pa, pi, pc, flash, addAcao, removeAcao, addComm, removeComm }) {
   const [filter, setFilter] = useState("todos");
-  const cats = { todos: "Todos", pecuaria: "Pecuária", graos: "Grãos", outros: "Outros", frutas: "Frutas", hortifruti: "Hortifrúti" };
+  const cats = { pecuaria: "Pecuária", graos: "Grãos", outros: "Outros", frutas: "Frutas", hortifruti: "Hortifrúti" };
+  const filterCats = { todos: "Todos", ...cats };
   const filtered = filter === "todos" ? comm : comm.filter(c => c.cat === filter);
   return (
     <div className="space-y-4">
@@ -311,11 +398,26 @@ function PainelTab({ moedas, acoes, indices, comm, pm, pa, pi, pc, flash }) {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <Card className="p-3"><SecTitle icon={DollarSign} title="Moedas" color="#1a5276" />{moedas.map((m, i) => <PriceRow key={m.id} emoji={m.emoji} nome={m.nome} valor={m.valor} prev={pm[m.id]} varPct={m.var} flash={flash.has(m.id)} alt={i % 2 === 0} />)}<div className="mt-2 text-xs opacity-25 text-right">Fonte: Sicredi Paranapanema PR/SP/RJ</div></Card>
-        <Card className="p-3"><SecTitle icon={Activity} title="Ações & Índices" color="#1a5276" />{acoes.map((a, i) => <PriceRow key={a.id} emoji={a.emoji} nome={a.nome} sub={a.sub} valor={a.valor} prev={pa[a.id]} varPct={a.var} flash={flash.has(a.id)} alt={i % 2 === 0} />)}<div className="border-t my-2" style={{ borderColor: "rgba(0,0,0,0.06)" }} />{indices.map((x, i) => <PriceRow key={x.id} emoji={x.emoji} nome={x.nome} valor={x.valor} prev={pi[x.id]} varPct={x.var} unidade="pts" flash={flash.has(x.id)} alt={i % 2 === 0} />)}<div className="mt-2 text-xs opacity-25 text-right">Fonte: B3 via Sicredi</div></Card>
+        <Card className="p-3">
+          <SecTitle icon={Activity} title="Ações & Índices" color="#1a5276" />
+          {acoes.length === 0 && <div className="text-xs opacity-40 py-2 text-center">Nenhuma ação adicionada.</div>}
+          {acoes.map((a, i) => <PriceRow key={a.id} emoji={a.emoji} nome={a.nome} sub={a.sub} valor={a.valor} prev={pa[a.id]} varPct={a.var} flash={flash.has(a.id)} alt={i % 2 === 0} onRemove={() => removeAcao(a.id)} />)}
+          <div className="border-t my-2" style={{ borderColor: "rgba(0,0,0,0.06)" }} />
+          {indices.map((x, i) => <PriceRow key={x.id} emoji={x.emoji} nome={x.nome} valor={x.valor} prev={pi[x.id]} varPct={x.var} unidade="pts" flash={flash.has(x.id)} alt={i % 2 === 0} />)}
+          <AddAcaoForm onAdd={addAcao} />
+          <div className="mt-2 text-xs opacity-25 text-right">Fonte: B3 via BRAPI</div>
+        </Card>
       </div>
       <Card className="p-3"><SecTitle icon={BarChart3} title="Indicadores Econômicos" color="#6b21a8" /><div className="grid grid-cols-2 md:grid-cols-3 gap-2">{INDICADORES.map((ind, i) => (<div key={i} className="rounded-lg p-2 text-center" style={{ background: i % 2 === 0 ? "#faf5ff" : "#f5f3ff" }}><div className="text-xs font-semibold opacity-60">{ind.nome} {ind.periodo && `(${ind.periodo})`}</div><div className="text-base font-bold" style={{ color: "#6b21a8" }}>{ind.valor}</div><div className="text-xs opacity-40">{ind.desc}</div></div>))}</div><div className="mt-2 text-xs opacity-25 text-right">Fonte: BCB / IBGE / FGV</div></Card>
-      <Card className="p-3"><SecTitle icon={Wheat} title="Commodities Agrícolas" color="#166534" /><div className="flex flex-wrap gap-1 mb-3">{Object.entries(cats).map(([k, v]) => (<button key={k} onClick={() => setFilter(k)} className="px-2 py-1 rounded-full text-xs font-semibold" style={{ background: filter === k ? "#166534" : "#f0fdf4", color: filter === k ? "#fff" : "#166534", border: `1px solid ${filter === k ? "#166534" : "#bbf7d0"}` }}>{v}</button>))}</div><div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{filtered.map((c, i) => <CommCard key={c.id} item={c} prev={pc[c.id]} flash={flash.has(c.id)} idx={i} />)}</div><div className="mt-2 text-xs opacity-25 text-right">Fonte: CEPEA/ESALQ-USP • Sicredi</div></Card>
-      <div className="text-xs opacity-25 text-center">📌 Moedas: AwesomeAPI (tempo real) • Ações/Ibovespa: BRAPI (tempo real) • Indicadores: BCB/IBGE/FGV (fixos) • Commodities: CEPEA/ESALQ-USP (simulados)</div>
+      <Card className="p-3">
+        <SecTitle icon={Wheat} title="Commodities Agrícolas" color="#166534" />
+        <div className="flex flex-wrap gap-1 mb-3">{Object.entries(filterCats).map(([k, v]) => (<button key={k} onClick={() => setFilter(k)} className="px-2 py-1 rounded-full text-xs font-semibold" style={{ background: filter === k ? "#166534" : "#f0fdf4", color: filter === k ? "#fff" : "#166534", border: `1px solid ${filter === k ? "#166534" : "#bbf7d0"}` }}>{v}</button>))}</div>
+        {filtered.length === 0 && <div className="text-xs opacity-40 py-2 text-center">Nenhuma commodity nesta categoria.</div>}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">{filtered.map((c, i) => <CommCard key={c.id} item={c} prev={pc[c.id]} flash={flash.has(c.id)} idx={i} onRemove={() => removeComm(c.id)} />)}</div>
+        <AddCommForm onAdd={addComm} cats={cats} />
+        <div className="mt-2 text-xs opacity-25 text-right">Fonte: CEPEA/ESALQ-USP • Sicredi</div>
+      </Card>
+      <div className="text-xs opacity-25 text-center">📌 Moedas: AwesomeAPI (tempo real) • Ações/Ibovespa: BRAPI (tempo real) • Indicadores: BCB/IBGE/FGV (fixos) • Boi Gordo/Vaca Gorda/Soja/Milho: AgroDoc·CEPEA (tempo real, a cada 30min) • Demais commodities: informadas pelo usuário (simuladas)</div>
     </div>
   );
 }
@@ -403,13 +505,79 @@ export default function App() {
   const [dataSource, setDataSource] = useState("aguardando");
 
   const [moedas, setMoedas] = useState(INIT_MOEDAS);
-  const [acoes, setAcoes] = useState(INIT_ACOES);
+  const [acoes, setAcoes] = useState(() => loadLS(LS_ACOES, INIT_ACOES));
   const [indices, setIndices] = useState(INIT_INDICES);
-  const [comm, setComm] = useState(INIT_COMM);
+  const [comm, setComm] = useState(() => loadLS(LS_COMM, INIT_COMM));
   const [pm, setPm] = useState({});
   const [pa, setPa] = useState({});
   const [pi, setPi] = useState({});
   const [pc, setPc] = useState({});
+
+  useEffect(() => { saveLS(LS_ACOES, acoes); }, [acoes]);
+  useEffect(() => { saveLS(LS_COMM, comm); }, [comm]);
+
+  const addAcao = useCallback(async (rawTicker) => {
+    const ticker = rawTicker.trim().toUpperCase();
+    if (!ticker) return { ok: false, error: "Digite um ticker." };
+    if (acoesRef.current.some(a => a.id === ticker)) return { ok: false, error: "Esse ativo já está na lista." };
+    try {
+      const res = await fetch(`https://brapi.dev/api/quote/${encodeURIComponent(ticker)}`);
+      const data = await res.json();
+      const q = data?.results?.[0];
+      if (!q || q.regularMarketPrice == null) return { ok: false, error: "Ticker não encontrado." };
+      const novo = { id: ticker, nome: ticker, sub: q.shortName || q.longName || "", emoji: "📈", valor: q.regularMarketPrice, var: parseFloat((q.regularMarketChangePercent ?? 0).toFixed(2)) };
+      setAcoes(prev => [...prev, novo]);
+      return { ok: true };
+    } catch (_) {
+      return { ok: false, error: "Erro ao buscar cotação. Tente novamente." };
+    }
+  }, []);
+
+  const removeAcao = useCallback((id) => {
+    setAcoes(prev => prev.filter(a => a.id !== id));
+    setPa(prev => { const n = { ...prev }; delete n[id]; return n; });
+  }, []);
+
+  const addComm = useCallback((nomeRaw, valorRaw, un, cat) => {
+    const nome = nomeRaw.trim();
+    if (!nome) return { ok: false, error: "Digite um nome." };
+    const valor = parseFloat(String(valorRaw).replace(",", "."));
+    if (!Number.isFinite(valor) || valor <= 0) return { ok: false, error: "Digite um valor válido." };
+    const id = slugify(nome);
+    if (!id || commRef.current.some(c => c.id === id)) return { ok: false, error: "Essa commodity já está na lista." };
+    const novo = { id, nome, emoji: "📦", valor, un: un.trim() || "R$", cat: cat || "outros" };
+    setComm(prev => [...prev, novo]);
+    return { ok: true };
+  }, []);
+
+  const removeComm = useCallback((id) => {
+    setComm(prev => prev.filter(c => c.id !== id));
+    setPc(prev => { const n = { ...prev }; delete n[id]; return n; });
+  }, []);
+
+  const updateCommReal = useCallback(async () => {
+    try {
+      const res = await fetch(API_COMM_URL);
+      const d = await res.json();
+      const mapping = { boi: d.boi_gordo_cepea_sp, vaca_gorda: d.vaca_gorda, soja: d.soja, milho: d.milho };
+      const curC = commRef.current;
+      const prevReal = {};
+      const fl = new Set();
+      curC.forEach(c => { if (c.real) prevReal[c.id] = c.valor; });
+      setPc(prev => ({ ...prev, ...prevReal }));
+      setComm(curC.map(c => {
+        if (!c.real) return c;
+        const nv = mapping[c.id];
+        if (nv == null) return c;
+        if (Math.abs(nv - c.valor) > 0.001) fl.add(c.id);
+        return { ...c, valor: nv };
+      }));
+      if (fl.size) {
+        setFlash(prevFl => new Set([...prevFl, ...fl]));
+        setTimeout(() => setFlash(prevFl => { const n = new Set(prevFl); fl.forEach(id => n.delete(id)); return n; }), 2500);
+      }
+    } catch (_) { /* mantém o último valor real conhecido */ }
+  }, []);
 
   // Use refs to always have current state inside doUpdate
   const moedasRef = useRef(moedas);
@@ -436,11 +604,12 @@ export default function App() {
     const prevC = sv(curC); setPc(prevC);
 
     // Buscar dados reais das APIs
+    const symbolsParam = [...curA.map(a => a.id), "%5EBVSP"].join(",");
     let realM = null, realA = null, realI = null;
     try {
       const [mRes, aRes] = await Promise.allSettled([
         fetch(API_MOEDAS_URL).then(r => r.json()),
-        fetch(API_ACOES_URL).then(r => r.json()),
+        fetch(`https://brapi.dev/api/quote/${symbolsParam}`).then(r => r.json()),
       ]);
       if (mRes.status === "fulfilled" && mRes.value) {
         const d = mRes.value;
@@ -455,11 +624,12 @@ export default function App() {
       if (aRes.status === "fulfilled" && aRes.value?.results) {
         const byS = {};
         aRes.value.results.forEach(r => { byS[r.symbol] = r; });
-        if (byS.PETR4 || byS.VALE3) {
-          realA = {
-            petr4: byS.PETR4 ? { valor: byS.PETR4.regularMarketPrice, var: parseFloat(byS.PETR4.regularMarketChangePercent.toFixed(2)) } : null,
-            vale3: byS.VALE3 ? { valor: byS.VALE3.regularMarketPrice, var: parseFloat(byS.VALE3.regularMarketChangePercent.toFixed(2)) } : null,
-          };
+        if (curA.length > 0) {
+          realA = {};
+          curA.forEach(a => {
+            const r = byS[a.id];
+            if (r && r.regularMarketPrice != null) realA[a.id] = { valor: r.regularMarketPrice, var: parseFloat((r.regularMarketChangePercent ?? 0).toFixed(2)) };
+          });
         }
         if (byS["^BVSP"]) {
           realI = { ibov: { valor: Math.round(byS["^BVSP"].regularMarketPrice), var: parseFloat(byS["^BVSP"].regularMarketChangePercent.toFixed(2)) } };
@@ -467,7 +637,7 @@ export default function App() {
       }
     } catch (_) { /* fallback para simulação abaixo */ }
 
-    const hasReal = !!(realM || realA);
+    const hasReal = !!(realM || (realA && Object.keys(realA).length));
     setDataSource(hasReal ? "real" : "simulado");
 
     setMoedas(curM.map(m => {
@@ -489,6 +659,7 @@ export default function App() {
       return { ...x, valor: nv, var: r ? r.var : parseFloat(((nv - prevI[x.id]) / prevI[x.id] * 100).toFixed(2)) };
     }));
     setComm(curC.map(c => {
+      if (c.real) return c; // atualizado pelo ciclo separado de cotações reais (30min)
       const nv = simVar(c.valor, 0.4);
       if (Math.abs(nv - c.valor) > 0.001) fl.add(c.id);
       return { ...c, valor: nv };
@@ -503,6 +674,13 @@ export default function App() {
 
   // Buscar dados reais na inicialização
   useEffect(() => { doUpdate(); }, [doUpdate]);
+
+  // Commodities reais (AgroDoc/CEPEA): ciclo próprio de 30min, dentro do limite de 100 req/dia da API
+  useEffect(() => {
+    updateCommReal();
+    const t = setInterval(updateCommReal, COMM_UPDATE_MS);
+    return () => clearInterval(t);
+  }, [updateCommReal]);
 
   // Countdown tick
   useEffect(() => {
@@ -535,7 +713,7 @@ export default function App() {
       </div>
       <div className="max-w-4xl mx-auto px-3 py-4">
         {tab === "painel" && <CountdownBar sec={cd} total={UPDATE_SEC} paused={paused} onToggle={() => setPaused(p => !p)} onRefresh={doUpdate} count={count} last={last} source={dataSource} />}
-        {tab === "painel" && <PainelTab moedas={moedas} acoes={acoes} indices={indices} comm={comm} pm={pm} pa={pa} pi={pi} pc={pc} flash={flash} />}
+        {tab === "painel" && <PainelTab moedas={moedas} acoes={acoes} indices={indices} comm={comm} pm={pm} pa={pa} pi={pi} pc={pc} flash={flash} addAcao={addAcao} removeAcao={removeAcao} addComm={addComm} removeComm={removeComm} />}
         {tab === "noticias" && <NoticiasTab />}
         {tab === "historico" && <HistoricoTab />}
         {tab === "graficos" && <GraficosTab />}
